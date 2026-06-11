@@ -1,3 +1,4 @@
+import random
 import os
 import shutil
 import zipfile
@@ -135,21 +136,40 @@ def dataset_prepare(dataset_name, download_path, save_path="./Data/", data_path=
 class DRDataset(Dataset):
     def __init__(self, folder_path, file_names, labels, transform=None):
         self.folder_path = folder_path
-        self.file_names = file_names
-        self.labels = labels
+        # Ensure file_names and labels support integer-location indexing
+        if isinstance(file_names, pd.Series):
+            self.file_names = file_names.reset_index(drop=True)
+        else:
+            self.file_names = file_names
+
+        if isinstance(labels, pd.Series):
+            self.labels = labels.reset_index(drop=True)
+        else:
+            self.labels = labels
         self.transform = transform
 
     def __len__(self):
         return len(self.file_names)
 
     def __getitem__(self, idx):
-        img_path = os.path.join(self.folder_path, self.file_names[idx])
+        # Use integer-location indexing for pandas Series, fall back to list/array indexing
+        if isinstance(self.file_names, pd.Series):
+            file_name = self.file_names.iloc[idx]
+        else:
+            file_name = self.file_names[idx]
+
+        img_path = os.path.join(self.folder_path, file_name)
         image = Image.open(img_path).convert("RGB")
 
         if self.transform:
             image = self.transform(image)
 
-        return image, self.labels[idx]
+        if isinstance(self.labels, pd.Series):
+            label = self.labels.iloc[idx]
+        else:
+            label = self.labels[idx]
+
+        return image, label
     
 def data_load(dataset_path, img_size, labels_type="Grading"):
     images_path = os.path.join(dataset_path, "Images")
@@ -213,6 +233,7 @@ def plot_img_byClass(samples_dict, samples_per_class=5, figsize=(12, 8)):
     plt.tight_layout()
     plt.show()
 
+
 def get_random_samples_perClass(dataset, keys=None, samples_per_class=5, seed=2026):
     labels = dataset.labels
     
@@ -243,6 +264,7 @@ def get_random_samples_perClass(dataset, keys=None, samples_per_class=5, seed=20
 
     return samples_dict
 
+
 def data_split(dataset, test_split_ratio=0.2, val_split=False, val_split_ratio=0.1, seed=2026):
     X_train_files, X_test_files, y_train, y_test = train_test_split(
         dataset.file_names, dataset.labels,
@@ -260,21 +282,24 @@ def data_split(dataset, test_split_ratio=0.2, val_split=False, val_split_ratio=0
     return (X_train_files, X_test_files, y_train, y_test) if not val_split else\
         (X_train_files, X_val_files, X_test_files, y_train, y_val, y_test)
         
+
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
         
-def create_dataloader(dataset, batch_size=16, shuffle=True, seed=2026):
+def create_dataloader(dataset, batch_size=16, shuffle=True, seed=2026, num_workers=None, pin_memory=False):
     g = torch.Generator()
     g.manual_seed(seed)
-    
-    num_workers = min(8, os.cpu_count())
-    
+
+    # Conservative defaults to avoid shared-memory allocation issues in constrained environments
+    if num_workers is None:
+        num_workers = min(2, os.cpu_count() or 1)
+
     dataloader = DataLoader(dataset=dataset,
                             batch_size=batch_size,
                             shuffle=shuffle, generator=g,
-                            num_workers=num_workers, pin_memory=True,
+                            num_workers=num_workers, pin_memory=pin_memory,
                             worker_init_fn=seed_worker)
-    
+
     return dataloader
