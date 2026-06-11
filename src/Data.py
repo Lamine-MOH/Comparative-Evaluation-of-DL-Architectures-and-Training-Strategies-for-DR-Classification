@@ -4,6 +4,14 @@ import zipfile
 import kagglehub
 import gdown
 import pandas as pd
+from PIL import Image
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.model_selection import train_test_split
+
 
 def dataset_download(dataset_name, data_path="./Data/"):
     if not dataset_name in ["Aptos", "IDRiD", "DDR", "Messidor-2"]:
@@ -123,3 +131,150 @@ def dataset_prepare(dataset_name, download_path, save_path="./Data/", data_path=
         df.to_csv(os.path.join(dataset_path, "labels.csv"), index=False)
         
     return dataset_path
+
+class DRDataset(Dataset):
+    def __init__(self, folder_path, file_names, labels, transform=None):
+        self.folder_path = folder_path
+        self.file_names = file_names
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.file_names)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.folder_path, self.file_names[idx])
+        image = Image.open(img_path).convert("RGB")
+
+        if self.transform:
+            image = self.transform(image)
+
+        return image, self.labels[idx]
+    
+def data_load(dataset_path, img_size, labels_type="Grading"):
+    images_path = os.path.join(dataset_path, "Images")
+    df = pd.read_csv(os.path.join(dataset_path, 'labels.csv'))
+   
+    # Load Labels
+    y = torch.tensor(df["diagnosis"])
+
+    # Apply Labels Type
+    y = torch.where(y == 0, 0, 1) if labels_type == "Binary" else\
+        torch.where(y == 0, 0, torch.where((y > 0) & (y < 4), 1, 2)) if labels_type == "Binary" else\
+        y
+
+    # Define transformations
+    ops = [transforms.Resize((img_size, img_size)), transforms.ToTensor()]
+
+    # Apply Zero Centred Normalization
+    ops.append(transforms.Normalize(mean=[0.5] * 3, std=[0.5] * 3))
+
+    transform = transforms.Compose(ops)
+
+    # Initialize Dataset 
+    dataset = DRDataset(images_path, df["file_name"], y, transform=transform)
+    
+    return dataset
+
+
+def plot_img_byClass(samples_dict, samples_per_class=5, figsize=(12, 8)):
+    classes = list(samples_dict.keys())
+    num_classes = len(classes)
+
+    fig, axes = plt.subplots(nrows=samples_per_class,
+                            ncols=num_classes,
+                            figsize=figsize)
+
+    # Standardize axes to 2D array
+    if num_classes == 1: axes = np.expand_dims(axes, axis=1)
+    if samples_per_class == 1: axes = np.expand_dims(axes, axis=0)
+
+    for col, class_name in enumerate(classes):
+        images = samples_dict[class_name]
+        axes[0, col].set_title(class_name, fontweight='bold')
+
+        for row in range(samples_per_class):
+            ax = axes[row, col]
+
+            if row < len(images):
+                img = images[row]
+
+                # Convert (C, H, W) -> (H, W, C) for Matplotlib
+                if img.ndim == 3:
+                    img = img.transpose((1, 2, 0))
+
+                # Clip values if normalized (to prevent matplotlib warnings)
+                img = np.clip(img, 0, 1)
+
+                ax.imshow(img, cmap='gray' if img.ndim == 2 else None)
+
+            ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+def get_random_samples_perClass(dataset, keys=None, samples_per_class=5, seed=2026):
+    labels = dataset.labels
+    
+    rng = np.random.default_rng(seed)
+
+    # Ensure labels is a numpy array for easy indexing
+    y_np = labels.numpy() if hasattr(labels, 'numpy') else np.array(labels)
+
+    unique_classes = np.unique(y_np)
+    class_names = unique_classes if keys is None else keys
+    samples_dict = {}
+
+    for cls, name in zip(unique_classes, class_names):
+        # 1. Find all indices where the label matches this class
+        indices = np.where(y_np == cls)[0]
+
+        # 2. Randomly pick 'n' indices
+        n_to_pick = min(len(indices), samples_per_class)
+        chosen_indices = rng.choice(indices, size=n_to_pick, replace=False)
+
+        # 3. Fetch images from the dataset one by one
+        class_samples = []
+        for idx in chosen_indices:
+            img, _ = dataset[idx] # Get image from dataset
+            class_samples.append(img.numpy()) # Convert tensor to numpy for plotting
+
+        samples_dict[str(name)] = class_samples
+
+    return samples_dict
+
+def data_split(dataset, test_split_ratio=0.2, val_split=False, val_split_ratio=0.1, seed=2026):
+    X_train_files, X_test_files, y_train, y_test = train_test_split(
+        dataset.file_names, dataset.labels,
+        test_size=test_split_ratio,
+        random_state=seed,
+        stratify= dataset.labels)
+    
+    if val_split:
+        X_train_files, X_val_files, y_train, y_val = train_test_split(
+            X_train_files, y_train,
+            test_size=val_split_ratio,
+            random_state=seed,
+            stratify= y_train)
+        
+    return (X_train_files, X_test_files, y_train, y_test) if not val_split else\
+        (X_train_files, X_val_files, X_test_files, y_train, y_val, y_test)
+        
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+        
+def create_dataloader(dataset, batch_size=16, shuffle=True, seed=2026):
+    g = torch.Generator()
+    g.manual_seed(seed)
+    
+    num_workers = min(8, os.cpu_count())
+    
+    dataloader = DataLoader(dataset=dataset,
+                            batch_size=batch_size,
+                            shuffle=shuffle, generator=g,
+                            num_workers=num_workers, pin_memory=True,
+                            worker_init_fn=seed_worker)
+    
+    return dataloader
