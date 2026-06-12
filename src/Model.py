@@ -7,8 +7,26 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 def model_setup(name, num_classes, conf):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
+    # Build selected Model
     if name == "InceptionV3Scratch":
-        model = InceptionV3Scratch(num_classes).to(device, non_blocking=True)
+        model = InceptionV3Scratch(num_classes)
+    elif name == "InceptionV3Pretrained":
+        model = InceptionV3Pretrained(num_classes)
+    elif name == "ResNet50Scratch":
+        model = ResNet50Scratch(num_classes)
+    elif name == "ResNet50Pretrained":
+        model = ResNet50Pretrained(num_classes)
+    elif name == "VGG16Scratch":
+        model = VGG16Scratch(num_classes)
+    elif name == "VGG16Pretrained":
+        model = VGG16Pretrained(num_classes)
+    elif name == "AlexNetScratch":
+        model = AlexNetScratch(num_classes)
+    elif name == "AlexNetPretrained":
+        model = AlexNetPretrained(num_classes)
+        
+    # Move model to device
+    model = model.to(device, non_blocking=True)
 
     # Loss Function
     if num_classes == 2:
@@ -73,8 +91,8 @@ class InceptionV3Scratch(nn.Module):
 class InceptionV3Pretrained(nn.Module):
     """
     """
-    def __init__(self, num_classes=2, freeze_backbone=True):
-        super().__init__()
+    def __init__(self, num_classes=2, dropout=0.4, freeze_backbone=True):
+        super().__init__(),
         self.num_classes = num_classes
 
         # Load pretrained backbone
@@ -87,7 +105,7 @@ class InceptionV3Pretrained(nn.Module):
         self.backbone = backbone
 
         # Custom head
-        self.dropout = nn.Dropout(p=DROPOUT)
+        self.dropout = nn.Dropout(p=dropout)
         self.fc = nn.Linear(in_features, 1 if num_classes == 2 else num_classes)
 
         if freeze_backbone:
@@ -97,7 +115,7 @@ class InceptionV3Pretrained(nn.Module):
         for param in self.backbone.parameters():
             param.requires_grad = False
 
-    def unfreeze_partial(self, freeze_n_params=FREEZE_LAYERS * 1000):
+    def unfreeze_partial(self, freeze_n_params):
         # First unfreeze all
         for param in self.backbone.parameters():
             param.requires_grad = True
@@ -125,7 +143,7 @@ class InceptionV3Pretrained(nn.Module):
 
 class ResNet50Scratch(nn.Module):
 
-    def __init__(self, num_classes=2):
+    def __init__(self, num_classes=2, dropout=0.4):
         super().__init__()
         self.num_classes = num_classes
 
@@ -138,7 +156,7 @@ class ResNet50Scratch(nn.Module):
         self.backbone = backbone
 
         # Custom head
-        self.dropout = nn.Dropout(p=DROPOUT)
+        self.dropout = nn.Dropout(p=dropout)
         self.fc = nn.Linear(in_features, 1 if num_classes == 2 else num_classes)
 
     def forward(self, x):
@@ -149,7 +167,7 @@ class ResNet50Scratch(nn.Module):
 
 class ResNet50Pretrained(nn.Module):
 
-    def __init__(self, num_classes=2, freeze_backbone=True):
+    def __init__(self, num_classes=2, dropout=0.4, freeze_backbone=True):
         super().__init__()
         self.num_classes = num_classes
 
@@ -162,7 +180,7 @@ class ResNet50Pretrained(nn.Module):
         self.backbone = backbone
 
         # Custom head
-        self.dropout = nn.Dropout(p=DROPOUT)
+        self.dropout = nn.Dropout(p=dropout)
         self.fc = nn.Linear(in_features, 1 if num_classes == 2 else num_classes)
 
         if freeze_backbone:
@@ -172,7 +190,7 @@ class ResNet50Pretrained(nn.Module):
         for param in self.backbone.parameters():
             param.requires_grad = False
             
-    def unfreeze_from_layer(self, start_layer=FREEZE_START_LAYER, freeze_bn=True):
+    def unfreeze_from_layer(self, start_layer, freeze_bn=True):
         # Define which named modules correspond to which "layer" numbers
         layer_names = {1: 'layer1', 2: 'layer2', 3: 'layer3', 4: 'layer4'}
         target_name = layer_names.get(start_layer, 'layer3')
@@ -208,7 +226,7 @@ class ResNet50Pretrained(nn.Module):
 class VGG16Scratch(nn.Module):
     """
     """
-    def __init__(self, num_classes=2, freeze_backbone=True):
+    def __init__(self, num_classes=2, dropout=0.4, freeze_backbone=True):
         super().__init__()
         self.num_classes = num_classes
 
@@ -221,7 +239,7 @@ class VGG16Scratch(nn.Module):
         self.backbone = backbone
 
         # Custom head
-        self.dropout = nn.Dropout(p=DROPOUT)
+        self.dropout = nn.Dropout(p=dropout)
         self.fc = nn.Linear(in_features, 1 if num_classes == 2 else num_classes)
 
     def forward(self, x):
@@ -233,7 +251,7 @@ class VGG16Scratch(nn.Module):
 class VGG16Pretrained(nn.Module):
     """
     """
-    def __init__(self, num_classes=2, freeze_backbone=True):
+    def __init__(self, num_classes=2, dropout=0.4, freeze_backbone=True):
         super().__init__()
         self.num_classes = num_classes
 
@@ -246,7 +264,7 @@ class VGG16Pretrained(nn.Module):
         self.backbone = backbone
 
         # Custom head
-        self.dropout = nn.Dropout(p=DROPOUT)
+        self.dropout = nn.Dropout(p=dropout)
         self.fc = nn.Linear(in_features, 1 if num_classes == 2 else num_classes)
 
         if freeze_backbone:
@@ -256,7 +274,7 @@ class VGG16Pretrained(nn.Module):
         for param in self.backbone.parameters():
             param.requires_grad = False
             
-    def unfreeze_from_block(self, start_block=FREEZE_START_BLOCK, freeze_bn=True):        
+    def unfreeze_from_block(self, start_block, freeze_bn=True):        
         block_mapping = {4: 17, 5: 24}
         limit = block_mapping.get(start_block, 17)
 
@@ -285,7 +303,7 @@ class VGG16Pretrained(nn.Module):
 class AlexNetScratch(nn.Module):
     """
     """
-    def __init__(self, num_classes=2):
+    def __init__(self, num_classes=2, dropout=0.4):
         super().__init__()
         self.num_classes = num_classes
 
@@ -302,10 +320,10 @@ class AlexNetScratch(nn.Module):
         
         # Custom head
         self.classifier = nn.Sequential(
-            nn.Dropout(p=DROPOUT),
+            nn.Dropout(p=dropout),
             nn.Linear(self.in_features, 4096),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=DROPOUT),
+            nn.Dropout(p=dropout),
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),
             nn.Linear(4096, 1 if num_classes == 2 else num_classes),
@@ -322,7 +340,7 @@ class AlexNetScratch(nn.Module):
 class AlexNetPretrained(nn.Module):
     """
     """
-    def __init__(self, num_classes=2, freeze_backbone=True):
+    def __init__(self, num_classes=2, dropout=0.4, freeze_backbone=True):
         super().__init__()
         self.num_classes = num_classes
 
@@ -339,10 +357,10 @@ class AlexNetPretrained(nn.Module):
         
         # Custom head
         self.classifier = nn.Sequential(
-            nn.Dropout(p=DROPOUT),
+            nn.Dropout(p=dropout),
             nn.Linear(self.in_features, 4096),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=DROPOUT),
+            nn.Dropout(p=dropout),
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),
             nn.Linear(4096, 1 if num_classes == 2 else num_classes),
