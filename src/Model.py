@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import models as tv_models
@@ -7,7 +8,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 def model_setup(name, num_classes, conf):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Build selected Model
+    # ------ Build selected Model ------
+    # Scratch vs Pretrained models
     if name == "InceptionV3Scratch":
         model = InceptionV3Scratch(num_classes)
     elif name == "InceptionV3Pretrained":
@@ -24,6 +26,12 @@ def model_setup(name, num_classes, conf):
         model = AlexNetScratch(num_classes)
     elif name == "AlexNetPretrained":
         model = AlexNetPretrained(num_classes)
+    
+    # State of the art models
+    elif name == "ModifiedXceptionModel":
+        model = ModifiedXceptionModel(num_classes)
+    elif name == "HybridCNNSVDELM":
+        model = HybridCNNSVDELM(num_classes)    
         
     # Move model to device
     model = model.to(device, non_blocking=True)
@@ -56,6 +64,10 @@ def model_setup(name, num_classes, conf):
 
 def count_params(m):
     return sum(p.numel() for p in m.parameters())
+
+# ---------------------------------------------------------------------------
+# Scratch vs Pretrained
+# ---------------------------------------------------------------------------
 
 class InceptionV3Scratch(nn.Module):
     """
@@ -388,3 +400,304 @@ class AlexNetPretrained(nn.Module):
         x = torch.flatten(x, 1)
         x = self.classifier(x)
         return x
+    
+
+# ---------------------------------------------------------------------------
+# State of Art
+# ---------------------------------------------------------------------------
+
+# -- ModifiedXceptionModel --------------------------------------------------
+
+class ModifiedXceptionModel(nn.Module):
+    """
+    EfficientNet-B3 backbone with deep-layer aggregation and an MLP head.
+ 
+    Args:
+        num_classes:    Number of output classes (default 5 for APTOS grades).
+        freeze_backbone: If True, backbone weights are frozen; only the
+                         classifier head is trained.
+    """
+ 
+    # Channel widths at tapped EfficientNet-B3 feature blocks
+    _TAP_CHANNELS = {2: 24, 5: 136, 7: 232}   # block index → out_channels
+    _FINAL_CHANNELS = 1536                      # block 8 (final) out_channels
+ 
+    def __init__(self, num_classes: int = 5, freeze_backbone: bool = False):
+        super().__init__()
+ 
+        backbone = tv_models.efficientnet_b3(
+            weights=tv_models.EfficientNet_B3_Weights.DEFAULT
+        )
+        # Keep only the feature extractor blocks (drop the classifier head)
+        self.features     = backbone.features          # nn.Sequential, blocks 0-8
+        self.hook_indices = set(self._TAP_CHANNELS)   # {2, 5, 7}
+ 
+        if freeze_backbone:
+            for param in self.features.parameters():
+                param.requires_grad = False
+ 
+        total_tapped = sum(self._TAP_CHANNELS.values()) + self._FINAL_CHANNELS  # 1928
+ 
+        self.classifier = nn.Sequential(
+            nn.Linear(total_tapped, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(4096, 512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(512, num_classes),
+        )
+ 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        tapped = []
+        for i, block in enumerate(self.features):
+            x = block(x)
+            if i in self.hook_indices:
+                tapped.append(x)
+        tapped.append(x)  # final feature map (block 8)
+ 
+        # Global average pool each tapped map, then concatenate → (B, 1928)
+        pooled     = [feat.mean(dim=[2, 3]) for feat in tapped]
+        aggregated = torch.cat(pooled, dim=1)
+ 
+        return self.classifier(aggregated)
+
+
+# -- CNNFeatureExtractor ----------------------------------------------------
+
+# CNN feature extractor  (Table 4 architecture)
+class CNNFeatureExtractor(nn.Module):
+    """
+    Four conv-BN-pool-dropout blocks followed by two fully-connected layers.
+ 
+    Args:
+        in_channels:  Number of input channels (default 3 for RGB).
+        n_features:   Dimension of the output feature vector (default 256).
+    """
+ 
+    def __init__(self, in_channels: int = 3, n_features: int = 256):
+        super().__init__()
+ 
+        def conv_block(in_ch, out_ch):
+            return nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(2, 2),
+                nn.Dropout2d(0.25),
+            )
+ 
+        self.conv_blocks = nn.Sequential(
+            conv_block(in_channels, 32),
+            conv_block(32, 64),
+            conv_block(64, 128),
+            conv_block(128, 256),
+        )
+ 
+        # After 4 × MaxPool2d(2,2) on a 224×224 input → 14×14 spatial size
+        self.flatten = nn.Flatten()
+ 
+        self.fc = nn.Sequential(
+            nn.Linear(256 * 14 * 14, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(512, n_features),
+            nn.ReLU(inplace=True),
+        )
+ 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv_blocks(x)
+        x = self.flatten(x)
+        return self.fc(x)
+ 
+ 
+# ELM  (pure numpy — no gradient needed)
+class ELM:
+    """
+    Extreme Learning Machine.
+    
+    Args:
+        n_hidden:     Number of hidden neurons.
+        activation:   'relu' | 'sigmoid' | 'tanh'.
+        random_state: Seed for reproducibility.
+    """
+ 
+    def __init__(
+        self,
+        n_hidden: int = 500,
+        activation: str = "relu",
+        random_state: int = 42,
+    ):
+        self.n_hidden    = n_hidden
+        self.activation  = activation
+        rng              = np.random.default_rng(random_state)
+        self._rng        = rng
+        self.W    = None   # (n_features, n_hidden)  — set in fit()
+        self.B    = None   # (1, n_hidden)
+        self.beta = None   # (n_hidden, n_outputs)
+ 
+    # ------------------------------------------------------------------
+    def _activate(self, x: np.ndarray) -> np.ndarray:
+        if self.activation == "relu":
+            return np.maximum(0, x)
+        if self.activation == "sigmoid":
+            return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
+        if self.activation == "tanh":
+            return np.tanh(x)
+        return x  # linear
+ 
+    def _hidden(self, X: np.ndarray) -> np.ndarray:
+        return self._activate(X @ self.W + self.B)   # (N, n_hidden)
+ 
+    # ------------------------------------------------------------------
+    def fit(self, X: np.ndarray, Y: np.ndarray) -> "ELM":
+        """
+        Train ELM.
+ 
+        Args:
+            X: (N, n_features) float array.
+            Y: (N, n_outputs)  float array  — one-hot for multiclass.
+        """
+        n_features = X.shape[1]
+        self.W    = self._rng.standard_normal((n_features, self.n_hidden))
+        self.B    = self._rng.standard_normal((1, self.n_hidden))
+        H         = self._hidden(X)                  # (N, n_hidden)
+        self.beta = np.linalg.pinv(H) @ Y            # (n_hidden, n_outputs)
+        return self
+ 
+    def decision_scores(self, X: np.ndarray) -> np.ndarray:
+        """Raw linear outputs  (N, n_outputs)."""
+        return self._hidden(X) @ self.beta
+ 
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        scores = self.decision_scores(X)
+        if scores.shape[1] == 1:
+            return (scores > 0.5).astype(int).ravel()
+        return np.argmax(scores, axis=1)
+ 
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        scores = self.decision_scores(X)
+        if scores.shape[1] == 1:
+            p = 1.0 / (1.0 + np.exp(-scores))
+            return np.hstack([1 - p, p])
+        # Softmax
+        shifted = scores - scores.max(axis=1, keepdims=True)
+        e       = np.exp(shifted)
+        return e / e.sum(axis=1, keepdims=True)
+ 
+ 
+# Full hybrid model  (nn.Module wrapper)
+class HybridCNNSVDELM(nn.Module):
+    """
+    Two-phase hybrid model: CNN pre-training → SVD dimensionality reduction
+    → ELM classification.
+
+    Args:
+        num_classes:   Number of target classes.
+        in_channels:   Input image channels (default 3).
+        n_cnn_features: CNN output feature dimension (default 256).
+        n_svd_features: Reduced dimension after TruncatedSVD (default 100).
+        n_elm_hidden:   ELM hidden neurons (default 500).
+    """
+ 
+    def __init__(
+        self,
+        num_classes: int = 5,
+        in_channels: int = 3,
+        n_cnn_features: int = 256,
+        n_svd_features: int = 100,
+        n_elm_hidden: int = 500,
+    ):
+        super().__init__()
+ 
+        self.num_classes    = num_classes
+        self.n_cnn_features = n_cnn_features
+        self.n_svd_features = n_svd_features
+ 
+        # --- CNN backbone ---
+        self.cnn = CNNFeatureExtractor(
+            in_channels=in_channels,
+            n_features=n_cnn_features,
+        )
+ 
+        # --- Phase-1 classification head (removed after SVD/ELM fitting) ---
+        self._phase1_head = nn.Linear(n_cnn_features, num_classes)
+ 
+        # --- SVD + ELM (fitted in phase 2, not part of the grad graph) ---
+        self.scaler  = StandardScaler()
+        self.svd     = TruncatedSVD(n_components=n_svd_features, random_state=42)
+        self.elm     = ELM(n_hidden=n_elm_hidden)
+        self._elm_fitted = False   # flag: which forward() path to use
+ 
+    # ------------------------------------------------------------------
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Phase 1: CNN logits  (used during train_model).
+        Phase 2: ELM scores as a tensor  (used during evaluate_model).
+        """
+        features = self.cnn(x)   # (B, n_cnn_features)
+ 
+        if not self._elm_fitted:
+            # Phase 1 — differentiable path
+            return self._phase1_head(features)
+ 
+        # Phase 2 — non-differentiable ELM path; no grad needed
+        with torch.no_grad():
+            feats_np = features.cpu().numpy()
+ 
+        feats_scaled = self.scaler.transform(feats_np)
+        feats_svd    = self.svd.transform(feats_scaled)
+        scores       = self.elm.decision_scores(feats_svd)   # (B, num_classes)
+        return torch.from_numpy(scores.astype(np.float32)).to(x.device)
+ 
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def fit_svd_elm(self, train_loader, device: torch.device) -> None:
+        """
+        Phase 2: extract CNN features for the whole training set, then
+        fit StandardScaler → TruncatedSVD → ELM.
+ 
+        Call this once after CNN pre-training is complete.
+ 
+        Args:
+            train_loader: DataLoader yielding (images, labels) batches.
+            device:       Same device the model lives on.
+        """
+        print("Phase 2 — extracting CNN features for SVD/ELM fitting...")
+        self.cnn.eval()
+ 
+        all_features, all_labels = [], []
+        for images, labels in train_loader:
+            images = images.to(device)
+            feats  = self.cnn(images).cpu().numpy()
+            all_features.append(feats)
+            all_labels.append(labels.numpy())
+ 
+        X = np.concatenate(all_features, axis=0)   # (N, n_cnn_features)
+        y = np.concatenate(all_labels,   axis=0)   # (N,)
+ 
+        # Standardise
+        print(f"  Fitting StandardScaler + TruncatedSVD "
+              f"({self.n_cnn_features} → {self.n_svd_features} features)...")
+        X_scaled = self.scaler.fit_transform(X)
+ 
+        # SVD
+        self.svd.fit(X_scaled)
+        cum_var = np.cumsum(self.svd.explained_variance_ratio_)[-1]
+        print(f"  Cumulative explained variance: {cum_var:.4f}")
+        X_svd = self.svd.transform(X_scaled)
+ 
+        # One-hot labels for ELM
+        Y_onehot = np.eye(self.num_classes)[y]     # (N, num_classes)
+ 
+        # ELM
+        print(f"  Fitting ELM ({self.elm.n_hidden} hidden neurons)...")
+        self.elm.fit(X_svd, Y_onehot)
+ 
+        self._elm_fitted = True
+        print("  Phase 2 complete — model switched to ELM inference mode.")
+ 
+ 
+
+
