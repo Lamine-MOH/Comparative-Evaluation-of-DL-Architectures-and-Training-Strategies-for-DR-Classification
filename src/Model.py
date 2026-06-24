@@ -31,7 +31,9 @@ def model_setup(name, num_classes, conf):
     elif name == "ModifiedXceptionModel":
         model = ModifiedXceptionModel(num_classes)
     elif name == "HybridCNNSVDELM":
-        model = HybridCNNSVDELM(num_classes)    
+        model = HybridCNNSVDELM(num_classes)
+    elif name == "MobileNetV2SVMClassifier":
+        model = MobileNetV2SVMClassifier(num_classes)    
         
     # Move model to device
     model = model.to(device, non_blocking=True)
@@ -587,7 +589,7 @@ class ELM:
         return e / e.sum(axis=1, keepdims=True)
  
  
-# Full hybrid model  (nn.Module wrapper)
+# Full hybrid model
 class HybridCNNSVDELM(nn.Module):
     """
     Two-phase hybrid model: CNN pre-training → SVD dimensionality reduction
@@ -697,7 +699,137 @@ class HybridCNNSVDELM(nn.Module):
  
         self._elm_fitted = True
         print("  Phase 2 complete — model switched to ELM inference mode.")
- 
- 
 
 
+# -- MobileNetV2 + SVM ----------------------------------------------------
+
+# backbone + regression head 
+class MobileNetV2Backbone(nn.Module):
+    """
+    Pre-trained MobileNetV2 with a two-layer FC head.
+
+    Args:
+        img_size:    Spatial resolution expected by the model (default 224).
+        freeze_backbone: Freeze MobileNetV2 conv weights; train heads only.
+    """
+
+    def __init__(self, img_size: int = 224, freeze_backbone: bool = False):
+        super().__init__()
+
+        base = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
+
+        # Drop the original classifier;
+        self.features = base.features          
+        self.pool     = nn.AdaptiveAvgPool2d(1)
+
+        if freeze_backbone:
+            for param in self.features.parameters():
+                param.requires_grad = False
+
+        # Mirrors Keras
+        self.fc1 = nn.Sequential(nn.Linear(1280, 256), nn.ReLU(inplace=True))
+        self.fc2 = nn.Sequential(nn.Linear(256, 256),  nn.ReLU(inplace=True))
+
+        # Regression output
+        self.regression_head = nn.Linear(256, 1)
+
+    # ------------------------------------------------------------------
+    def get_embedding(self, x: torch.Tensor) -> torch.Tensor:
+        """Return 256-d feature vector from fc2 (used by SVM in phase 2)."""
+        x = self.features(x)
+        x = self.pool(x).flatten(1)
+        x = self.fc1(x)
+        return self.fc2(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.regression_head(self.get_embedding(x))
+
+
+# full pipeline model
+class MobileNetV2SVMClassifier(nn.Module):
+    """
+    Args:
+        num_classes:     Number of DR grades (default 5).
+        img_size:        Input spatial resolution (default 224).
+        freeze_backbone: Freeze MobileNetV2 conv weights during phase 1.
+        svm_kernel:      SVM kernel — 'rbf' | 'linear' | 'poly'.
+        svm_C:           SVM regularisation parameter.
+        svm_gamma:       SVM gamma ('scale' | 'auto' | float).
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 5,
+        img_size: int = 224,
+        freeze_backbone: bool = False,
+        svm_kernel: str = "rbf",
+        svm_C: float = 1.0,
+        svm_gamma: str = "scale",
+    ):
+        super().__init__()
+
+        self.num_classes = num_classes
+
+        # CNN backbone with regression head
+        self.backbone = MobileNetV2Backbone(
+            img_size=img_size,
+            freeze_backbone=freeze_backbone,
+        )
+
+        # SVM + scaler 
+        self.scaler = StandardScaler()
+        self.svm    = SVC(
+            kernel=svm_kernel,
+            C=svm_C,
+            gamma=svm_gamma,
+            probability=True,
+            random_state=42,
+            decision_function_shape="ovr",
+        )
+        self._svm_fitted = False
+
+    def forward(self, x: torch.Tensor):
+        if not self._svm_fitted:
+            # standard regression forward
+            return self.backbone(x)
+
+        # SVM path
+        with torch.no_grad():
+            emb_np = self.backbone.get_embedding(x).cpu().numpy()
+
+        emb_scaled = self.scaler.transform(emb_np)
+        scores = self.svm.decision_function(emb_scaled).astype(np.float32)
+        return torch.from_numpy(scores).to(x.device)
+
+    @torch.no_grad()
+    def fit_svm(self, train_loader, device: torch.device) -> None:
+        """
+        extract fc2 embeddings for the whole training set, fit
+        StandardScaler, then fit SVM.
+
+        Args:
+            train_loader: DataLoader yielding (images, labels) batches.
+                          Labels can be int or float — will be rounded and
+                          cast to int for SVM fitting.
+            device:       Device the model lives on.
+        """
+        self.backbone.eval()
+
+        all_emb, all_labels = [], []
+        for images, labels in train_loader:
+            images = images.to(device)
+            emb    = self.backbone.get_embedding(images).cpu().numpy()
+            all_emb.append(emb)
+            # Round float regression targets back to integer grades
+            all_labels.append(
+                np.round(labels.numpy()).astype(int).ravel()
+            )
+
+        X = np.concatenate(all_emb,    axis=0)   # (N, 256)
+        y = np.concatenate(all_labels, axis=0)   # (N,)
+
+        X_scaled = self.scaler.fit_transform(X)
+
+        self.svm.fit(X_scaled, y)
+
+        self._svm_fitted = True
