@@ -33,7 +33,9 @@ def model_setup(name, num_classes, conf):
     elif name == "HybridCNNSVDELM":
         model = HybridCNNSVDELM(num_classes)
     elif name == "MobileNetV2SVMClassifier":
-        model = MobileNetV2SVMClassifier(num_classes)    
+        model = MobileNetV2SVMClassifier(num_classes)
+    elif name == "EfficientNetB5DR":
+        model = EfficientNetB5DR(num_classes)  
         
     # Move model to device
     model = model.to(device, non_blocking=True)
@@ -833,3 +835,86 @@ class MobileNetV2SVMClassifier(nn.Module):
         self.svm.fit(X_scaled, y)
 
         self._svm_fitted = True
+
+
+# -- EfficientNet-B5 and CLAHE ----------------------------------------------------
+
+class EfficientNetB5DR(nn.Module):
+    """
+    EfficientNet-B5 backbone with a two-layer classification head
+
+    Args:
+        num_classes:      Number of output classes.
+        freeze_backbone:  If True, freeze all backbone layers, only the
+                          last `unfreeze_last_n` layers are kept trainable.
+        unfreeze_last_n:  Number of backbone layers to keep trainable
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 2,
+        freeze_backbone: bool = True,
+        unfreeze_last_n: int = 20,
+    ):
+        super().__init__()
+
+        self.num_classes = num_classes
+        self.binary      = (num_classes == 2)
+
+        # backbone
+        base = models.efficientnet_b5(
+            weights=models.EfficientNet_B5_Weights.DEFAULT
+        )
+
+        self.features = base.features
+        self.pool     = nn.AdaptiveAvgPool2d(1) 
+
+        # freeze all backbone layers first
+        for param in self.features.parameters():
+            param.requires_grad = False
+
+        # unfreeze the last
+        if not freeze_backbone:
+            all_layers = list(self.features.modules())
+            for layer in all_layers[-unfreeze_last_n:]:
+                for param in layer.parameters():
+                    param.requires_grad = True
+
+        # classification head
+        backbone_out = 2048
+
+        self.head = nn.Sequential(
+            nn.Dropout(0.3),
+            nn.Linear(backbone_out, 512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Returns (B, num_classes) logits.
+
+        For binary mode the two logits represent [non-referable, referable].
+        BCEWithLogitsLoss in the wrapped criterion uses only logits[:, 1].
+        Argmax over both logits is equivalent to thresholding at 0.5.
+        """
+        x = self.features(x)
+        x = self.pool(x).flatten(1)   # (B, 2048)
+        return self.head(x)           # (B, num_classes)
+
+# Loss wrapper for binary mode
+class BinaryDRLoss(nn.Module):
+    """
+    Extracts the positive-class logit (index 1) before computing BCE
+    """
+
+    def __init__(self, pos_weight: torch.Tensor = None):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    def forward(
+        self, logits: torch.Tensor, labels: torch.Tensor
+    ) -> torch.Tensor:
+        pos_logit = logits[:, 1]
+        return self.bce(pos_logit, labels.float())
