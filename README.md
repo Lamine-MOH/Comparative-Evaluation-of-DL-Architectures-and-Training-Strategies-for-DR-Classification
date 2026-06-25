@@ -37,6 +37,20 @@ dataset_path = dataset_prepare("Aptos", path)
 > **Note for IDRiD:** requires no authentication; downloaded via gdown.  
 > **Note for Aptos/DDR/Messidor-2:** requires a [Kaggle API token](https://www.kaggle.com/docs/api).
 
+## Available Models
+
+| Name | Type |
+|------|------|
+| `InceptionV3Scratch` / `InceptionV3Pretrained` | Scratch vs Transfer |
+| `ResNet50Scratch` / `ResNet50Pretrained` | Scratch vs Transfer |
+| `VGG16Scratch` / `VGG16Pretrained` | Scratch vs Transfer |
+| `AlexNetScratch` / `AlexNetPretrained` | Scratch vs Transfer |
+| `ModifiedXceptionModel` | SotA (EfficientNet-B3 multi-scale) |
+| `HybridCNNSVDELM` | SotA (CNN → SVD → ELM) |
+| `MobileNetV2SVMClassifier` | SotA (MobileNetV2 → SVM) |
+| `EfficientNetB5DR` | SotA |
+| `VGG16DR` / `InceptionV3DR` | SotA |
+
 ## Running an Experiment
 
 See `experiments/run_experiment.py` for a full configurable pipeline:
