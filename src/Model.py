@@ -928,47 +928,6 @@ class BinaryDRLoss(nn.Module):
         return self.bce(pos_logit, labels.float())
 
 
-# -- VGG-16 with novel Preprocessing ----------------------------------------------------
-
-class VGG16DR(nn.Module):
-    """
-    VGG16 backbone (fully frozen) with a custom two-layer FC head
-
-    Args:
-        num_classes:    Number of DR grades.
-        freeze_backbone: Freeze all VGG16 conv/pool layers
-    """
-
-    def __init__(self, num_classes: int = 5, freeze_backbone: bool = True):
-        super().__init__()
-
-        base = models.vgg16(weights=models.VGG16_Weights.DEFAULT)
-
-        # Keep only the conv feature blocks
-        self.features = base.features
-        self.pool     = nn.AdaptiveAvgPool2d(1)
-
-        if freeze_backbone:
-            for param in self.features.parameters():
-                param.requires_grad = False
-
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(512, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
-            nn.Linear(4096, num_classes),
-        )
-
-    def forward(self, x: torch.Tensor):
-        x = self.features(x)
-        x = self.pool(x).flatten(1)
-        return self.classifier(x)
-
-
 # -- VGG16 and InceptionV3 ----------------------------------------------------
 
 # VGG16
