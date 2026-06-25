@@ -5,7 +5,7 @@
 ## Requirements
 
 - Python 3.10+
-- CUDA 12.x
+- CUDA 12.8
 
 ## Installation
 
