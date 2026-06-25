@@ -37,7 +37,9 @@ def model_setup(name, num_classes, conf):
     elif name == "EfficientNetB5DR":
         model = EfficientNetB5DR(num_classes)
     elif name == "VGG16DR":
-        model = VGG16DR(num_classes)  
+        model = VGG16DR(num_classes) 
+    elif name == "InceptionV3DR":
+        model = InceptionV3DR(num_classes) 
         
     # Move model to device
     model = model.to(device, non_blocking=True)
@@ -959,5 +961,107 @@ class VGG16DR(nn.Module):
 
     def forward(self, x: torch.Tensor):
         x = self.features(x)
+        x = self.pool(x).flatten(1)
+        return self.classifier(x)
+
+
+# -- VGG16 and InceptionV3 ----------------------------------------------------
+
+# VGG16
+class VGG16DR(nn.Module):
+    """
+    Frozen VGG16 backbone with a Flatten-based two-FC-layer head.
+
+    Args:
+        num_classes:     Number of DR grades.
+        freeze_backbone: Freeze all VGG16 conv/pool layers.
+        input_size:      (H, W) of the input images.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 5,
+        freeze_backbone: bool = True,
+        input_size: tuple = (224, 224),
+    ):
+        super().__init__()
+
+        base = models.vgg16(weights=models.VGG16_Weights.DEFAULT)
+        self.features = base.features
+
+        if freeze_backbone:
+            for param in self.features.parameters():
+                param.requires_grad = False
+
+        # Compute flattened size
+        h_out = input_size[0] // 32
+        w_out = input_size[1] // 32
+        flat_dim = 512 * h_out * w_out
+
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(flat_dim, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(4096, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.features(x)
+        return self.classifier(x)
+
+
+# InceptionV3
+class InceptionV3DR(nn.Module):
+    """
+    Frozen InceptionV3 backbone with a GlobalAveragePooling → Dense head.
+    
+    Args:
+        num_classes:     Number of DR grades.
+        freeze_backbone: Freeze all InceptionV3 layers.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = 5,
+        freeze_backbone: bool = True,
+    ):
+        super().__init__()
+
+        base = models.inception_v3(
+            weights=models.Inception_V3_Weights.DEFAULT,
+            aux_logits=False,
+        )
+
+        # Remove Inception's own FC classifier
+        self.backbone = nn.Sequential(
+            base.Conv2d_1a_3x3, base.Conv2d_2a_3x3, base.Conv2d_2b_3x3,
+            nn.MaxPool2d(3, stride=2),
+            base.Conv2d_3b_1x1, base.Conv2d_4a_3x3,
+            nn.MaxPool2d(3, stride=2),
+            base.Mixed_5b, base.Mixed_5c, base.Mixed_5d,
+            base.Mixed_6a,
+            base.Mixed_6b, base.Mixed_6c, base.Mixed_6d, base.Mixed_6e,
+            base.Mixed_7a, base.Mixed_7b, base.Mixed_7c,
+        )
+        self.pool = nn.AdaptiveAvgPool2d(1)
+
+        if freeze_backbone:
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+
+        # InceptionV3 final mixed block outputs 2048 channels
+        self.classifier = nn.Sequential(
+            nn.Linear(2048, 1024),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(1024, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor):
+        x = self.backbone(x)
         x = self.pool(x).flatten(1)
         return self.classifier(x)
