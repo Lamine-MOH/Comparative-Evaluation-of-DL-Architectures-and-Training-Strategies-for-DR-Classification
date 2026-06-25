@@ -140,7 +140,12 @@ experiments/
 ## Citation
 
 ```bibtex
-
+@article{benhabirech2026comparative,
+  author  = {BenHabirech, Mohamed Lamine and Belhadj, Mourad and Tamzalit, Dalila and Aiadi, Oussama},
+  title   = {Comparative Evaluation of Deep Learning Architectures and Training Strategies for Diabetic Retinopathy Classification},
+  journal = {Under review at Springer},
+  year    = {2026}
+}
 ```
 
 ## License
