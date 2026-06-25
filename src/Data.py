@@ -8,7 +8,6 @@ import pandas as pd
 from PIL import Image
 import torch
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.model_selection import train_test_split
