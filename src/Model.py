@@ -4,6 +4,10 @@ import torch.nn as nn
 from torchvision import models as tv_models
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torchvision import models
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import TruncatedSVD
+from sklearn.svm import SVC
 
 def model_setup(name, num_classes, conf):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
