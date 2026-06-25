@@ -1,6 +1,8 @@
 import argparse
 import sys
 import os
+from src.Data import DRDataset
+from torchvision import transforms
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.Data import dataset_download, dataset_prepare, data_load, data_split, create_dataloader
@@ -31,9 +33,6 @@ def main():
     splits = data_split(dataset, test_split_ratio=0.2, val_split=True, val_split_ratio=0.1)
     X_train, X_val, X_test, y_train, y_val, y_test = splits
 
-    from src.Data import DRDataset
-    from torchvision import transforms
-    import os
     images_path = os.path.join(dataset_path, "Images")
     transform   = dataset.transform
     train_ds = DRDataset(images_path, X_train, y_train, transform)
