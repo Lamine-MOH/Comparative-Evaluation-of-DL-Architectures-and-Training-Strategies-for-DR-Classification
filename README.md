@@ -7,7 +7,7 @@
 ## Requirements
 
 - Python 3.10+
-- CUDA 12.8
+- CUDA 12.8 *(optional — CPU works out of the box; see `requirements.txt` for GPU instructions)*
 
 ## Installation
 
