@@ -180,7 +180,7 @@ def data_load(dataset_path, img_size, labels_type="Grading"):
 
     # Apply Labels Type
     y = torch.where(y == 0, 0, 1) if labels_type == "Binary" else\
-        torch.where(y == 0, 0, torch.where((y > 0) & (y < 4), 1, 2)) if labels_type == "Binary" else\
+        torch.where(y == 0, 0, torch.where((y > 0) & (y < 4), 1, 2)) if labels_type == "Grading" else\
         y
 
     # Define transformations
