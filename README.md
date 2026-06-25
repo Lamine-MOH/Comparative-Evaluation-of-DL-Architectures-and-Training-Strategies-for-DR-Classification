@@ -76,3 +76,5 @@ experiments/
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+[Archive on Zenodo](https://doi.org/10.5281/zenodo.20843975)
