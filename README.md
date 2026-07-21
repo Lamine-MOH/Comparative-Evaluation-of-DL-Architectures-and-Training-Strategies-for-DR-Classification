@@ -1,7 +1,7 @@
 # Comparative Evaluation of DL Architectures for Diabetic Retinopathy Classification
 
 > Code for the paper: **"Comparative Evaluation of Deep Learning Architectures and Training Strategies for Diabetic Retinopathy Classification"** — ICPR 2026
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20843975.svg)](https://doi.org/10.5281/zenodo.21478445)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21478445.svg)](https://doi.org/10.5281/zenodo.21478445)
 
 
 ## Requirements
