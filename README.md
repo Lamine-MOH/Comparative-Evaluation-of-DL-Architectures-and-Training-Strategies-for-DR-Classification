@@ -139,6 +139,42 @@ experiments/
 | | AlexNet | **0.7137** | **0.71** | **0.7** | **0.7** | 0.626 | 0.64 | 0.57 | 0.53 | 0.5802 | _0.19_ | 0.21 | 0.18 | 0.5802 | 0.19 | _0.22_ | _0.2_ |
 
 
+## Pretrained Weights
+
+Checkpoints are available on the [Zenodo record](https://doi.org/10.5281/zenodo.21478445).
+
+| Experiment | Model | Dataset | Format | File |
+|------------|-------|---------|--------|------|
+| Exp 1 | ModifiedXceptionModel | Aptos/IDRiD/DDR/Messidor-2 | Keras `.keras` | `inception_*.keras` |
+| Exp 1 | MobileNetV2SVMClassifier | Aptos/IDRiD/DDR/Messidor-2 | Keras `.keras` | `mobilenetv2_*.weights.h5` |
+| Exp 2 | InceptionV3Pretrained | Aptos/IDRiD/DDR/Messidor-2 | PyTorch `.pt` | `InceptionV3Pretrained_*.pt` |
+| Exp 2 | ResNet50Pretrained | Aptos/IDRiD/DDR/Messidor-2 | PyTorch `.pt` | `ResNet50Pretrained_*.pt` |
+| Exp 2 | VGG16Pretrained | Aptos/IDRiD/DDR/Messidor-2 | PyTorch `.pt` | `VGG16Pretrained_*.pt` |
+| Exp 2 | AlexNetPretrained | Aptos/IDRiD/DDR/Messidor-2 | PyTorch `.pt` | `AlexNetPretrained_*.pt` |
+
+### Loading Experiment 2 weights (PyTorch)
+```python
+from src.Model import model_setup
+import torch
+
+setup = model_setup("ResNet50Pretrained", num_classes=5, conf={
+    'LR': 1e-4, 'LR_SCHED_FACTOR': 0.5, 'LR_SCHED_PAT': 5, 'LR_MIN': 1e-6
+})
+setup['model'].load_state_dict(torch.load("ResNet50Pretrained_Aptos.pt", map_location="cpu"))
+setup['model'].eval()
+```
+
+### Loading Experiment 1 weights (Keras)
+```python
+import tensorflow as tf
+model = tf.keras.models.load_model("inception_aptos.keras")
+```
+
+> **Note:** Experiment 1 weights are in Keras format as the original training was conducted 
+> in TensorFlow. The PyTorch reimplementation in `src/Model.py` reproduces the same 
+> architectures for future retraining.
+
+
 ## Citation
 
 ```bibtex
