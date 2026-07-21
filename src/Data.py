@@ -11,6 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.model_selection import train_test_split
+from torchvision import transforms
 
 
 def dataset_download(dataset_name, data_path="./Data/"):
